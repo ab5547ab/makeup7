@@ -1,0 +1,116 @@
+name: Build APK
+
+# בונה APK אוטומטית בכל פוש ל-main, וגם ידנית מהטאב Actions ("Run workflow").
+#
+# הגישה כאן: במקום לתחזק ידנית קבצי Gradle/AGP/Kotlin (שהדרישות שלהם
+# מתעדכנות תדיר ומאוד קל "ליפול מאחור" ביחסן), אנחנו נותנים ל-Flutter עצמו
+# לייצר את שלד האנדרואיד (android/) מחדש בכל ריצה, בהתאמה מדויקת לגרסת
+# Flutter שמותקנת באותו רגע. לאחר מכן "מטליאים" מעליו את הקבצים המותאמים
+# אישית שלנו (אייקון, MainActivity עם ערוץ ה-Wi-Fi, והרשאות ה-manifest)
+# מתוך תיקיית native_overrides/, ומוסיפים בהרצה את הגדרת ה-"core library
+# desugaring" הנדרשת על ידי flutter_local_notifications (ראו השלב
+# "Enable core library desugaring" למטה - נדרש כי אי אפשר לשמור קובץ
+# build.gradle קבוע בריפו כשה-android/ עצמו נוצר מחדש בכל ריצה).
+#
+# לאחר סיום הריצה - היכנסו ל-Actions -> הריצה האחרונה -> Artifacts -> makeup-calendar-apk
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate Android platform scaffold (version-matched automatically)
+        run: flutter create --platforms=android --org com.mua .
+
+      - name: Apply custom native files (icon, MainActivity, manifest permissions)
+        run: |
+          cp native_overrides/MainActivity.kt android/app/src/main/kotlin/com/mua/makeup_calendar/MainActivity.kt
+          cp native_overrides/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp native_overrides/res/mipmap-mdpi/ic_launcher.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          cp native_overrides/res/mipmap-hdpi/ic_launcher.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          cp native_overrides/res/mipmap-xhdpi/ic_launcher.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          cp native_overrides/res/mipmap-xxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          cp native_overrides/res/mipmap-xxxhdpi/ic_launcher.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      - name: Enable core library desugaring (required by flutter_local_notifications)
+        # flutter_local_notifications דורש "core library desugaring" פעיל
+        # ב-app/build.gradle - אחרת הבנייה נכשלת עם השגיאה:
+        #   "Dependency ':flutter_local_notifications' requires core library
+        #   desugaring to be enabled for :app."
+        # אי אפשר לשמור קובץ build.gradle קבוע בריפו (כי android/ כולו נוצר
+        # מחדש בכל ריצה על ידי `flutter create`, ראו השלב הקודם), אז במקום
+        # זה "מוסיפים" כאן עוד בלוק android{}/dependencies{} בסוף הקובץ
+        # שנוצר - גם ל-Groovy (build.gradle) וגם ל-Kotlin DSL
+        # (build.gradle.kts), לפי מה ש-Flutter בפועל ייצר באותה ריצה.
+        # גרדל ממזג בלוקים חוזרים על אותו extension, כך שההוספה הזו לא
+        # תלויה במבנה המדויק של שאר הקובץ ותישאר תקינה גם כשהתבנית של
+        # Flutter תשתנה בעתיד.
+        run: |
+          GRADLE_KTS="android/app/build.gradle.kts"
+          GRADLE_GROOVY="android/app/build.gradle"
+          if [ -f "$GRADLE_KTS" ]; then
+            echo "Patching $GRADLE_KTS (Kotlin DSL)"
+            {
+              echo ""
+              echo "android {"
+              echo "    compileOptions {"
+              echo "        isCoreLibraryDesugaringEnabled = true"
+              echo "    }"
+              echo "}"
+              echo ""
+              echo "dependencies {"
+              echo "    coreLibraryDesugaring(\"com.android.tools:desugar_jdk_libs:2.1.5\")"
+              echo "}"
+            } >> "$GRADLE_KTS"
+          elif [ -f "$GRADLE_GROOVY" ]; then
+            echo "Patching $GRADLE_GROOVY (Groovy DSL)"
+            {
+              echo ""
+              echo "android {"
+              echo "    compileOptions {"
+              echo "        coreLibraryDesugaringEnabled true"
+              echo "    }"
+              echo "}"
+              echo ""
+              echo "dependencies {"
+              echo "    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'"
+              echo "}"
+            } >> "$GRADLE_GROOVY"
+          else
+            echo "::error::No android/app/build.gradle(.kts) found after flutter create - Flutter's Android template may have changed."
+            exit 1
+          fi
+
+      - name: Analyze (non-blocking)
+        run: flutter analyze || true
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: makeup-calendar-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
