@@ -48,7 +48,7 @@ class NotificationService {
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidInit);
-    await _plugin.initialize(initSettings);
+    await _plugin.initialize(settings: initSettings);
 
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
@@ -111,11 +111,12 @@ class NotificationService {
 
     final time = DateFormat('HH:mm').format(appointment.dateTime);
     await _plugin.zonedSchedule(
-      _notificationId(appointment.id),
-      _reminderTitle,
-      '${appointment.clientName} · בשעה $time · ${appointment.categoryData.name}',
-      tz.TZDateTime.from(scheduled, tz.local),
-      const NotificationDetails(
+      id: _notificationId(appointment.id),
+      title: _reminderTitle,
+      body:
+          '${appointment.clientName} · בשעה $time · ${appointment.categoryData.name}',
+      scheduledDate: tz.TZDateTime.from(scheduled, tz.local),
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'appointment_reminders',
           'תזכורות לתורים',
@@ -130,7 +131,7 @@ class NotificationService {
   }
 
   Future<void> cancelReminder(String appointmentId) async {
-    await _plugin.cancel(_notificationId(appointmentId));
+    await _plugin.cancel(id: _notificationId(appointmentId));
   }
 
   /// מבטל ומתזמן מחדש את כל התזכורות לפי רשימת התורים הנוכחית. נקרא
